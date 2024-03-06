@@ -1,0 +1,101 @@
+pipeline {
+    environment {
+        dockerImage = ''
+    }
+    agent any
+    stages {
+        stage('notice start') {
+            steps {
+              sh """
+                   curl https://open.feishu.cn/open-apis/bot/v2/hook/103d22ed-4a30-416d-84bb-5662051e947e \
+                                         -H 'Content-type: application/json' \
+                                         -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"${env.JOB_NAME} start build","content":[[{"tag":"a","text":"build_no:${currentBuild.displayName},view\\n","href":"${env.BUILD_URL}"}]]}}}}'
+              """
+            }
+        }
+         stage('clone data') {
+            steps {
+                dir('data') {
+                    checkout scmGit(
+                        branches: [[name: 'main']],
+                        extensions: [submodule(parentCredentials: true, recursiveSubmodules: true, reference: '')],
+                        userRemoteConfigs: [[credentialsId: '1', url: 'https://gitlab.yeahmobi.com/indian-chess/release_data.git']]
+                    )
+                }
+            }
+        }
+        stage('execute python') {
+            steps {
+                sh 'rm -rf ./data/server/Config/*'
+                sh 'cd ./data && sh export_server.sh && cd -'
+            }
+        }
+        stage('clone server') {
+            steps {
+                 dir('server') {
+                     git url: "https://gitlab.yeahmobi.com/indian-chess/server.git",
+                     credentialsId: "1",
+                     branch: "main"
+                 }
+            }
+        }
+        stage('clone release server') {
+            steps {
+                 dir('release_server') {
+                     git url: "https://gitlab.yeahmobi.com/indian-chess/server_release.git",
+                     credentialsId: "1",
+                     branch: "deploy"
+                 }
+            }
+        }
+
+        stage('git commit') {
+            steps {
+                withCredentials([gitUsernamePassword(credentialsId: '1', gitToolName: 'Default')]){
+                    sh """
+                    cd ./server
+                    git checkout main
+                    cp -rf ../data/server/Config/* ../server/hall/config/release_business/
+                    git config --global user.email "shuai.jing@greatcin.com"
+                    git config --global user.name "jenkins"
+                    git add ./hall/config/release_business/
+                    git commit -m "excel to lua"
+                    git push origin main
+
+                    cd ../release_server
+                    git checkout deploy
+                    cp -rf ../data/server/Config/* ../release_server/hall/config/release_business/
+                    git config --global user.email "shuai.jing@greatcin.com"
+                    git config --global user.name "jenkins"
+                    git add ./hall/config/release_business/
+                    git commit -m "excel to lua"
+                    git push origin main
+
+                    """
+                }
+            }
+        }
+
+
+    }
+    post {
+        failure {
+            sh """
+                 curl https://open.feishu.cn/open-apis/bot/v2/hook/103d22ed-4a30-416d-84bb-5662051e947e \
+                                       -H 'Content-type: application/json' \
+                                       -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"BUILD_RESULT:FAIL!!!!!!!!!!!!!","content":[[{"tag":"text","text":"build_project:${env.JOB_NAME}\\n- user:${currentBuild.buildCauses.shortDescription}\\n- time: ${currentBuild.durationString}\\n"},{"tag":"a","text":"build_no:${currentBuild.displayName},view\\n","href":"${env.BUILD_URL}"},{"tag":"at","user_id":"all"}]]}}}}'
+            """
+        }
+        unstable {
+            echo 'This will run only if the run was marked as unstable'
+        }
+        success {
+            sh """
+                 curl https://open.feishu.cn/open-apis/bot/v2/hook/103d22ed-4a30-416d-84bb-5662051e947e \
+                                       -H 'Content-type: application/json' \
+                                       -d '{"msg_type":"post","content":{"post":{"zh_cn":{"title":"BUILD_RESULT:SUCCESS","content":[[{"tag":"text","text":"build_project:${env.JOB_NAME}\\n- user:${currentBuild.buildCauses.shortDescription}\\n- time: ${currentBuild.durationString}\\n"},{"tag":"a","text":"build_no:${currentBuild.displayName},view\\n","href":"${env.BUILD_URL}"}]]}}}}'
+            """
+        }
+
+    }
+}
